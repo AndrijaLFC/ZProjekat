@@ -7,6 +7,8 @@ import java.util.Enumeration;
 
 public class MyCode extends CodeV3 {
 
+
+    
     public MyCode(boolean[] algorithm_conf, boolean[] extensions_conf, boolean extensions_rules) throws GuiException {
         super(algorithm_conf, extensions_conf, extensions_rules);
     }
