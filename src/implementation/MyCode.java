@@ -1,20 +1,41 @@
 package implementation;
 
 import code.GuiException;
+import com.sun.istack.internal.NotNull;
+import com.sun.istack.internal.Nullable;
+import gui.Constants;
+import org.bouncycastle.asn1.DERGeneralString;
+import org.bouncycastle.asn1.DERSet;
+import org.bouncycastle.asn1.x500.X500Name;
+import org.bouncycastle.asn1.x500.style.BCStrictStyle;
+import org.bouncycastle.asn1.x500.style.BCStyle;
+import org.bouncycastle.asn1.x509.*;
+import org.bouncycastle.cert.CertIOException;
+import org.bouncycastle.cert.X509v3CertificateBuilder;
+import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
+import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.operator.ContentSigner;
+import org.bouncycastle.operator.OperatorCreationException;
+import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
+import org.bouncycastle.x509.extension.X509ExtensionUtil;
 import x509.v3.CodeV3;
 
 import javax.naming.InvalidNameException;
 import javax.naming.ldap.LdapName;
 import java.io.*;
-import java.security.KeyStore;
-import java.security.KeyStoreException;
-import java.security.NoSuchAlgorithmException;
+import java.math.BigInteger;
+import java.security.*;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.Collections;
 import java.util.Enumeration;
+import java.util.Set;
+import java.util.Vector;
+
+import static org.bouncycastle.asn1.x500.style.RFC4519Style.l;
+import static org.bouncycastle.asn1.x500.style.RFC4519Style.st;
 
 public class MyCode extends CodeV3 {
 
@@ -38,6 +59,25 @@ public class MyCode extends CodeV3 {
     private static final int VERSION_3_CODE = 2;
 
     private static final int VERSION_1_CODE = 1;
+
+
+    private static final int KEY_USAGE_DIGITAL_SIGNATURE = 0;
+
+    private static final int KEY_USAGE_CONTENT_COMMITMENT = 1;
+
+    private static final int KEY_USAGE_KEY_ENCIPHERMENT = 2;
+
+    private static final int KEY_USAGE_DATA_ENCIPHERMENT = 3;
+
+    private static final int KEY_USAGE_KEY_AGREEMENT = 4;
+
+    private static final int KEY_USAGE_CERTIFICATE_SIGNING = 5;
+
+    private static final int KEY_USAGE_CRL_SIGNING = 6;
+
+    private static final int KEY_USAGE_ENCIPHER_ONLY = 7;
+
+    private static final int KEY_USAGE_DECIPHER_ONLY = 8;
 
 
     private KeyStore keyStore;
@@ -70,7 +110,7 @@ public class MyCode extends CodeV3 {
         }
     }
 
-    private void loadBasicCertificateInfo(X509Certificate certificate, X509Certificate issuer){
+    private void loadBasicCertificateInfo(@NotNull X509Certificate certificate, @Nullable X509Certificate issuer){
 
         access.setPublicKeyAlgorithm(certificate.getSigAlgName());
 
@@ -84,23 +124,52 @@ public class MyCode extends CodeV3 {
 
         access.setVersion(certificate.getVersion() == 3? VERSION_3_CODE : VERSION_1_CODE);
 
-        for(String info : Collections.list())
+        access.setPublicKeyParameter(certificate.getPublicKey() + "");
+
+        access.setPublicKeyParameter("test");
+
+        String issuerName = certificate.getIssuerDN().toString() + " ";
+
+        access.setIssuer(issuerName
+                .replaceAll(", ", ",")
+                .replaceAll("=", "= ,")
+                .replaceAll("  ", " "));
+
+        if (issuer != null)
+            access.setIssuerSignatureAlgorithm(issuer.getSigAlgName());
+        else
+            access.setIssuerSignatureAlgorithm(certificate.getSigAlgName());
+
         try {
             LdapName ldapName = new LdapName(certificate.getSubjectDN().toString());
 
-            String infoType = info.split("=")[0];
+            for(String info : Collections.list(ldapName.getAll())) {
 
-            String infoValue = info.split("=")[1];
+                String[] infoTypeAndValue = info.split("=");
 
-            switch(infoType){
-                case "CN":  access.setSubjectCommonName(infoValue);         break;
-                case "C":   access.setSubjectCountry(infoValue);            break;
-                case "L":   access.setSubjectLocality(infoValue);           break;
-                case "O":   access.setSubjectOrganization(infoValue);       break;
-                case "OU":  access.setSubjectOrganizationUnit(infoValue);   break;
-                case "ST":  access.setSubjectState(infoValue);              break;
+                if (infoTypeAndValue.length < 2)
+                    continue;
+
+                String infoType = info.split("=")[0];
+
+                String infoValue = info.split("=")[1];
+
+                switch (infoType) {
+                    case "CN":
+                        access.setSubjectCommonName(infoValue);             break;
+                    case "C":
+                        access.setSubjectCountry(infoValue);                break;
+                    case "L":
+                        access.setSubjectLocality(infoValue);               break;
+                    case "O":
+                        access.setSubjectOrganization(infoValue);           break;
+                    case "OU":
+                        access.setSubjectOrganizationUnit(infoValue);       break;
+                    case "ST":
+                        access.setSubjectState(infoValue);                  break;
+                }
             }
-            
+
         } catch (InvalidNameException e) {
             e.printStackTrace();
         }
@@ -108,6 +177,147 @@ public class MyCode extends CodeV3 {
 
         //access.setPublicKeyParameter();
 
+    }
+
+
+    private X509Certificate generateCertificate(KeyPair keyPair){
+        StringBuilder stringBuilder = new StringBuilder();
+
+        stringBuilder.append("OU=").append(access.getSubjectOrganizationUnit());
+
+        stringBuilder.append(",O=").append(access.getSubjectOrganization());
+
+        stringBuilder.append(",L=").append(access.getSubjectLocality());
+
+        stringBuilder.append(",ST=").append(access.getSubjectState());
+
+        stringBuilder.append(",C=").append(access.getSubjectCountry());
+
+        stringBuilder.append(",CN=").append(access.getSubjectCommonName());
+
+        X500Name x500Name = new X500Name(stringBuilder.toString());
+
+        X509v3CertificateBuilder certificateBuilder = new JcaX509v3CertificateBuilder(
+                x500Name,
+                new BigInteger(access.getSerialNumber()),
+                access.getNotBefore(),
+                access.getNotAfter(),
+                x500Name,
+                keyPair.getPublic()
+        );
+
+
+        String dateOfBirth = access.getDateOfBirth();
+        String placeOfBirth = access.getSubjectDirectoryAttribute(Constants.POB);
+        String countryOfCitizenship = access.getSubjectDirectoryAttribute(Constants.COC);
+        String gender = access.getGender();
+
+        Vector<Attribute> attributes = new Vector<>();
+
+        if (dateOfBirth.length() > 0)
+            attributes.add(new Attribute(BCStyle.DATE_OF_BIRTH, new DERSet(new DERGeneralString(dateOfBirth))));
+
+        if (placeOfBirth.length() > 0)
+            attributes.add(new Attribute(BCStyle.PLACE_OF_BIRTH, new DERSet(new DERGeneralString(placeOfBirth))));
+
+        if (countryOfCitizenship.length() > 0)
+            attributes.add(new Attribute(BCStyle.COUNTRY_OF_CITIZENSHIP, new DERSet(new DERGeneralString(countryOfCitizenship))));
+
+        if (gender.length() > 0)
+            attributes.add(new Attribute(BCStyle.GENDER, new DERSet(new DERGeneralString(gender))));
+
+
+        try {
+            if (attributes.size() != 0)
+                certificateBuilder.addExtension(Extension.subjectDirectoryAttributes,
+                        access.isCritical(Constants.SDA),
+                        new SubjectDirectoryAttributes(attributes)
+                        );
+
+        } catch (CertIOException e) {
+            e.printStackTrace();
+        }
+
+
+
+        boolean[] selectedKeyUsages = access.getKeyUsage();
+
+        int keyUsages = 0;
+
+        if (selectedKeyUsages[KEY_USAGE_DIGITAL_SIGNATURE])
+            keyUsages |= KeyUsage.digitalSignature;
+
+        if (selectedKeyUsages[KEY_USAGE_CONTENT_COMMITMENT])
+            keyUsages |= KeyUsage.nonRepudiation;
+
+        if (selectedKeyUsages[KEY_USAGE_KEY_ENCIPHERMENT])
+            keyUsages |= KeyUsage.keyEncipherment;
+
+        if (selectedKeyUsages[KEY_USAGE_DATA_ENCIPHERMENT])
+            keyUsages |= KeyUsage.dataEncipherment;
+
+        if (selectedKeyUsages[KEY_USAGE_KEY_AGREEMENT])
+            keyUsages |= KeyUsage.keyAgreement;
+
+        if (selectedKeyUsages[KEY_USAGE_CERTIFICATE_SIGNING])
+            keyUsages |= KeyUsage.keyCertSign;
+
+        if (selectedKeyUsages[KEY_USAGE_CRL_SIGNING])
+            keyUsages |= KeyUsage.cRLSign;
+
+        if (selectedKeyUsages[KEY_USAGE_ENCIPHER_ONLY])
+            keyUsages |= KeyUsage.encipherOnly;
+
+        if (selectedKeyUsages[KEY_USAGE_DECIPHER_ONLY])
+            keyUsages |= KeyUsage.decipherOnly;
+
+
+
+        KeyUsage keyUsage = new KeyUsage(keyUsages);
+
+        try {
+            certificateBuilder.addExtension(Extension.keyUsage,
+                    access.isCritical(Constants.KU),
+                    keyUsage);
+        } catch (CertIOException e) {
+            e.printStackTrace();
+        }
+
+        int pathLen = 0;
+
+        if (access.getPathLen().length() > 0)
+            Integer.parseInt(access.getPathLen());
+
+        boolean isCA = access.isCA();
+
+        BasicConstraints basicConstraints;
+
+        if(isCA)
+            basicConstraints = new BasicConstraints(pathLen);
+        else
+            basicConstraints = new BasicConstraints(false);
+
+
+        try {
+            certificateBuilder.addExtension(Extension.basicConstraints,
+                    access.isCritical(Constants.BC),
+                    basicConstraints
+            );
+        } catch (CertIOException e) {
+            e.printStackTrace();
+        }
+
+        try {
+            ContentSigner signer = new JcaContentSignerBuilder(access.getPublicKeyDigestAlgorithm())
+                    .build(keyPair.getPrivate());
+
+            return new JcaX509CertificateConverter().getCertificate(certificateBuilder.build(signer));
+        } catch (OperatorCreationException | CertificateException e) {
+            e.printStackTrace();
+        }
+
+
+        return null;
     }
 
     @Override
@@ -185,17 +395,133 @@ public class MyCode extends CodeV3 {
 
             loadBasicCertificateInfo(certificate, issuerCertificate);
 
+            Set<String> criticalExtensions = Collections.EMPTY_SET;
 
-        } catch (KeyStoreException e) {
+            criticalExtensions = certificate.getCriticalExtensionOIDs();
+
+            boolean keyUsageCritical = false;
+            boolean subjectDirectoryAttributesCritical = false;
+            boolean basicConstraintCritical = false;
+            for(String criticalExtension : criticalExtensions){
+                if (criticalExtension.equals(Extension.keyUsage.toString()))
+                    access.setCritical(Constants.KU, keyUsageCritical = true);
+                else if (criticalExtension.equals(Extension.subjectDirectoryAttributes.toString()))
+                    access.setCritical(Constants.SDA, subjectDirectoryAttributesCritical = true);
+                else if (criticalExtension.equals(Extension.basicConstraints.toString()))
+                    access.setCritical(Constants.BC, basicConstraintCritical = true);
+            }
+
+
+            boolean[] keyUsage = certificate.getKeyUsage();
+
+            if (keyUsage != null)
+                access.setKeyUsage(keyUsage);
+            else if (keyUsageCritical)
+                return KEYPAIR_ERROR_CODE;
+
+            byte[] sdaBytes = certificate.getExtensionValue(Extension.subjectDirectoryAttributes.toString());
+
+            if (sdaBytes == null && subjectDirectoryAttributesCritical)
+                return KEYPAIR_ERROR_CODE;
+
+            if (sdaBytes != null){
+                SubjectDirectoryAttributes subjectDirectoryAttributes = SubjectDirectoryAttributes
+                        .getInstance(X509ExtensionUtil.fromExtensionValue(sdaBytes));
+
+                Vector<Attribute> attributeVector = subjectDirectoryAttributes.getAttributes();
+
+                for(Attribute attribute : attributeVector){
+                    String attributeType = attribute.getAttrType().toString();
+
+                    String attributeValue = attribute.getAttrValues().toString();
+
+                    attributeValue = attributeValue.substring(1, attributeValue.length() - 1);
+
+                    if (attributeType.equals(BCStyle.PLACE_OF_BIRTH.toString()))
+                        access.setSubjectDirectoryAttribute(Constants.POB, attributeValue);
+                    else if (attributeType.equals(BCStyle.COUNTRY_OF_CITIZENSHIP.toString()))
+                        access.setSubjectDirectoryAttribute(Constants.COC, attributeValue);
+                    else if (attributeType.equals(BCStyle.GENDER.toString()))
+                        access.setGender(attributeValue);
+                    else if (attribute.equals(BCStyle.DATE_OF_BIRTH.toString()))
+                        access.setDateOfBirth(attributeValue);
+                }
+            }
+
+
+            int basicConstraints = certificate.getBasicConstraints();
+
+            // Ukoliko nije CA, vraca se vrednost -1,
+            if (basicConstraints != -1)
+                access.setPathLen(basicConstraints == Integer.MAX_VALUE ? "" + basicConstraints : "");
+
+            access.setCA(basicConstraints != -1);
+
+            if (certificate.getSubjectDN().equals(certificate.getIssuerDN()))
+                return KEYPAIR_UNSIGNED_CODE;
+
+            if (keyStore.isCertificateEntry(keyPairName)){
+
+                Enumeration<String> enumeration = keyStore.aliases();
+
+                while(enumeration.hasMoreElements()){
+                    String key = enumeration.nextElement();
+
+                    if (key.equals(keyPairName))
+                        continue;
+
+                    X509Certificate x509Certificate = (X509Certificate) keyStore.getCertificate(key);
+
+                    try {
+                        certificate.verify(x509Certificate.getPublicKey());
+
+                        return KEYPAIR_TRUSTED_CERT;
+                    } catch (CertificateException | NoSuchAlgorithmException | NoSuchProviderException | SignatureException | InvalidKeyException e) {
+
+                    }
+                }
+
+            }
+
+            return KEYPAIR_SIGNED_CODE;
+        } catch (KeyStoreException | IOException e) {
             e.printStackTrace();
         }
 
 
-        return 0;
+        return KEYPAIR_ERROR_CODE;
     }
 
     @Override
-    public boolean saveKeypair(String s) {
+    public boolean saveKeypair(String keyPairName) {
+
+        try {
+            if (keyStore.containsAlias(keyPairName))
+                return false;
+
+            // kreiramo instancu generatora kljuceva
+            KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance(access.getPublicKeyAlgorithm());
+
+            keyPairGenerator.initialize(Integer.parseInt(access.getPublicKeyParameter()));
+
+            System.out.println(access.getPublicKeyParameter());
+
+            KeyPair keyPair = keyPairGenerator.generateKeyPair();
+
+            X509Certificate x509Certificate = generateCertificate(keyPair);
+
+
+            keyStore.setKeyEntry(keyPairName, keyPair.getPrivate(),
+                    KEYSTORE_PASSWORD.toCharArray(),
+                    new X509Certificate[]{x509Certificate});
+
+            saveKeyStore();
+
+            return true;
+        } catch (KeyStoreException | NoSuchAlgorithmException e) {
+            e.printStackTrace();
+        }
+
         return false;
     }
 
