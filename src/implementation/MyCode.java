@@ -10,11 +10,14 @@ import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.asn1.x500.style.BCStrictStyle;
 import org.bouncycastle.asn1.x500.style.BCStyle;
 import org.bouncycastle.asn1.x509.*;
+import org.bouncycastle.asn1.x509.Extension;
 import org.bouncycastle.cert.CertIOException;
 import org.bouncycastle.cert.X509v3CertificateBuilder;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
+import org.bouncycastle.cert.jcajce.JcaX509CertificateHolder;
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.OperatorCreationException;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
@@ -26,19 +29,21 @@ import javax.naming.ldap.LdapName;
 import java.io.*;
 import java.math.BigInteger;
 import java.security.*;
+import java.security.cert.*;
 import java.security.cert.Certificate;
-import java.security.cert.CertificateException;
-import java.security.cert.X509Certificate;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.Set;
 import java.util.Vector;
 
+import static org.bouncycastle.asn1.x500.style.RFC4519Style.c;
 import static org.bouncycastle.asn1.x500.style.RFC4519Style.l;
 import static org.bouncycastle.asn1.x500.style.RFC4519Style.st;
 
 public class MyCode extends CodeV3 {
 
+
+    private static final String X509_CERTIFICATE_TYPE = "X.509";
 
     private static final String KEYSTORE_TYPE = "pkcs12";
 
@@ -110,6 +115,16 @@ public class MyCode extends CodeV3 {
         }
     }
 
+
+    private void saveKeyStore(KeyStore keyStore, String filePath, String password){
+
+        try(FileOutputStream fos = new FileOutputStream(filePath)){
+            keyStore.store(fos, password.toCharArray());
+        } catch (IOException | NoSuchAlgorithmException | CertificateException | KeyStoreException e) {
+            e.printStackTrace();
+        }
+    }
+
     private void loadBasicCertificateInfo(@NotNull X509Certificate certificate, @Nullable X509Certificate issuer){
 
         access.setPublicKeyAlgorithm(certificate.getSigAlgName());
@@ -132,7 +147,7 @@ public class MyCode extends CodeV3 {
 
         access.setIssuer(issuerName
                 .replaceAll(", ", ",")
-                .replaceAll("=", "= ,")
+                .replaceAll("=,", "= ,")
                 .replaceAll("  ", " "));
 
         if (issuer != null)
@@ -384,7 +399,6 @@ public class MyCode extends CodeV3 {
 
         Certificate[] chainedCertificates = null;
 
-
         try {
             certificate = (X509Certificate) keyStore.getCertificate(keyPairName);
 
@@ -393,15 +407,18 @@ public class MyCode extends CodeV3 {
             if (chainedCertificates != null)
                 issuerCertificate = (X509Certificate) chainedCertificates[0];
 
+
             loadBasicCertificateInfo(certificate, issuerCertificate);
 
-            Set<String> criticalExtensions = Collections.EMPTY_SET;
+            Set<String> criticalExtensions = certificate.getCriticalExtensionOIDs();
 
-            criticalExtensions = certificate.getCriticalExtensionOIDs();
+            if (criticalExtensions == null)
+                criticalExtensions = Collections.EMPTY_SET;
 
             boolean keyUsageCritical = false;
             boolean subjectDirectoryAttributesCritical = false;
             boolean basicConstraintCritical = false;
+
             for(String criticalExtension : criticalExtensions){
                 if (criticalExtension.equals(Extension.keyUsage.toString()))
                     access.setCritical(Constants.KU, keyUsageCritical = true);
@@ -448,18 +465,32 @@ public class MyCode extends CodeV3 {
                 }
             }
 
-
+            // dobijamo kolika je maksimalna duzina puta
+            // duzina puta je jedino prisutna kod sertifikata koji su CA
             int basicConstraints = certificate.getBasicConstraints();
 
             // Ukoliko nije CA, vraca se vrednost -1,
+            // postavimo odgovarajucu vrednost u gui
             if (basicConstraints != -1)
                 access.setPathLen(basicConstraints == Integer.MAX_VALUE ? "" + basicConstraints : "");
 
+            // namestamo odgovarajuce podatke na gui
             access.setCA(basicConstraints != -1);
 
+            // verujemo da je trusted ukoliko je sertifikat/keypair CA
+            if (basicConstraints != -1)
+               return KEYPAIR_TRUSTED_CERT;
+
+
+
+            // ako sertifikat nije potpisan od strane nekog CA
+            // odnosno sam sebe je potpisao, smatramo ga nepotpisanim
             if (certificate.getSubjectDN().equals(certificate.getIssuerDN()))
                 return KEYPAIR_UNSIGNED_CODE;
 
+
+            // sertifikat je trusted ukoliko ga je potpisao neko
+            // od lokalnih CA
             if (keyStore.isCertificateEntry(keyPairName)){
 
                 Enumeration<String> enumeration = keyStore.aliases();
@@ -483,6 +514,8 @@ public class MyCode extends CodeV3 {
 
             }
 
+            // ovde dolazimo ako je sertifikat potpisan od nekog CA
+            // kome mi licno ne verujemo, sertifikat je potpisan ali nije proveren
             return KEYPAIR_SIGNED_CODE;
         } catch (KeyStoreException | IOException e) {
             e.printStackTrace();
@@ -526,27 +559,149 @@ public class MyCode extends CodeV3 {
     }
 
     @Override
-    public boolean removeKeypair(String s) {
+    public boolean removeKeypair(String keyPairName) {
+
+        try {
+            // izbrisemo trazeni par kljuceva iz keystore-a
+            keyStore.deleteEntry(keyPairName);
+
+            // sacuvamo izmene
+            saveKeyStore();
+
+            // vratimo true jer je sve proslo normalno
+            return true;
+        } catch (KeyStoreException e) {
+            e.printStackTrace();
+        }
+
+        // ukoliko je doslo do neke greske pri brisanju iz keystore-a
+        // vratimo false, odnosno da je doslo do greske
+        return false;
+    }
+
+
+
+    @Override
+    public boolean importKeypair(String keyPairName, String keyStoreFilePath, String keyStorePassword) {
+
+        try(FileInputStream fis = new FileInputStream(keyStoreFilePath)){
+            // otvorimo udaljeni keystore
+            KeyStore remoteKeyStore = KeyStore.getInstance(KEYSTORE_TYPE, new BouncyCastleProvider());
+
+            // ucitamo sadrzaj udaljenog keystore-a
+            remoteKeyStore.load(fis, keyStorePassword.toCharArray());
+
+            // smatramo da se nalazi samo jedan par kljuceva u fajlu
+            // stoga dohvatamo taj jedan i sacuvamo ga
+            String alias = remoteKeyStore.aliases().nextElement();
+            Key key = remoteKeyStore.getKey(alias, keyStorePassword.toCharArray());
+
+            // sacuvamo entry
+            keyStore.setKeyEntry(keyPairName, key, keyStorePassword.toCharArray(), remoteKeyStore.getCertificateChain(alias));
+
+            saveKeyStore();
+
+            return true;
+        } catch (IOException | KeyStoreException | CertificateException | NoSuchAlgorithmException | UnrecoverableKeyException e) {
+            e.printStackTrace();
+        }
+
         return false;
     }
 
     @Override
-    public boolean importKeypair(String s, String s1, String s2) {
+    public boolean exportKeypair(String keyPairName, String filePath, String password){
+
+        try {
+            KeyStore remoteKeyStore = KeyStore.getInstance(KEYSTORE_TYPE, new BouncyCastleProvider());
+
+            // dohvatimo lanac sertifikata para kljuceva koje zelimo da eksportujemo
+            Certificate[] chain = keyStore.getCertificateChain(keyPairName);
+
+            // alociramo keystore
+            remoteKeyStore.load(null, null);
+
+            // ubacimo u novi keystore
+            remoteKeyStore.setKeyEntry(keyPairName,
+                    keyStore.getKey(keyPairName, KEYSTORE_PASSWORD.toCharArray()),
+                    password.toCharArray(),
+                    chain
+            );
+
+            // sacuvamo u zadati fajl
+            saveKeyStore(remoteKeyStore, filePath, password);
+
+            return true;
+        } catch (KeyStoreException | NoSuchAlgorithmException | CertificateException | IOException | UnrecoverableKeyException e) {
+            e.printStackTrace();
+        }
+        // vracamo false ukoliko je doslo do neke greske
+        return false;
+    }
+
+
+    @Override
+    public boolean importCertificate(String filePath, String certificateName) {
+
+        try(FileInputStream fis = new FileInputStream(filePath)){
+            // izgenerisemo sertifikat
+            X509Certificate importedCertificate = (X509Certificate) CertificateFactory
+                    .getInstance(X509_CERTIFICATE_TYPE)
+                    .generateCertificate(fis);
+
+
+            keyStore.setCertificateEntry(certificateName, importedCertificate );
+
+            saveKeyStore();
+
+            return true;
+        } catch (IOException | CertificateException | KeyStoreException e) {
+            e.printStackTrace();
+        }
+
         return false;
     }
 
     @Override
-    public boolean exportKeypair(String s, String s1, String s2) {
-        return false;
-    }
+    public boolean exportCertificate(String file, String certificateName, int encoding, int format) {
 
-    @Override
-    public boolean importCertificate(String s, String s1) {
-        return false;
-    }
+        try(FileOutputStream fos = new FileOutputStream(file)){
 
-    @Override
-    public boolean exportCertificate(String s, String s1, int i, int i1) {
+            X509Certificate certificate = (X509Certificate) keyStore.getCertificate(certificateName);
+
+
+            if (encoding == Constants.DER){
+                fos.write(certificate.getEncoded());
+
+                return true;
+            }
+
+            // sigurno treba da sacuvamo fajl kao PEM
+
+            OutputStreamWriter osw = new OutputStreamWriter(fos);
+            JcaPEMWriter pemWriter = new JcaPEMWriter(osw);
+
+            // prvi upisemo sam sertifikat
+            pemWriter.writeObject(certificate);
+
+            // ako treba ceo lanac
+            if (format == Constants.CHAIN){
+                Certificate[] certificates = keyStore.getCertificateChain(certificateName);
+
+                if (certificates != null)
+                    for(Certificate chainCertificate : certificates)
+                        pemWriter.writeObject(chainCertificate);
+            }
+
+            // zatvorimo strimove
+            pemWriter.close();
+            osw.close();
+
+            return true;
+        } catch (IOException | KeyStoreException | CertificateEncodingException e) {
+            e.printStackTrace();
+        }
+
         return false;
     }
 
