@@ -107,21 +107,12 @@ public class MyCode extends CodeV3 {
         if (keyStore == null)
             return;
 
-        FileOutputStream fos = null;
 
-        try {
-            // pozovemo metodu store
-            keyStore.store(fos = new FileOutputStream(KEYSTORE_NAME), KEYSTORE_PASSWORD.toCharArray());
-
+        try(FileOutputStream fos = new FileOutputStream(KEYSTORE_NAME)){
+            // sacuvamo sve u fajl
+            keyStore.store(fos, KEYSTORE_PASSWORD.toCharArray());
         } catch (KeyStoreException | IOException | CertificateException | NoSuchAlgorithmException e) {
             e.printStackTrace();
-        }finally {
-            if (fos != null)
-                try {
-                    fos.close();
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
         }
     }
 
@@ -539,6 +530,7 @@ public class MyCode extends CodeV3 {
     public boolean saveKeypair(String keyPairName) {
 
         try {
+            // ako vec postoji sertifikat/parKljuceva pod tim imenom
             if (keyStore.containsAlias(keyPairName))
                 return false;
 
