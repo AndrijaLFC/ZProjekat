@@ -12,10 +12,14 @@ import org.bouncycastle.asn1.x500.style.BCStyle;
 import org.bouncycastle.asn1.x509.*;
 import org.bouncycastle.asn1.x509.Extension;
 import org.bouncycastle.cert.CertIOException;
+import org.bouncycastle.cert.X509CertificateHolder;
 import org.bouncycastle.cert.X509v3CertificateBuilder;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateHolder;
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
+import org.bouncycastle.cms.*;
+import org.bouncycastle.crypto.params.DSAKeyParameters;
+import org.bouncycastle.crypto.util.PublicKeyFactory;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.openssl.PEMParser;
 import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
@@ -25,6 +29,8 @@ import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import org.bouncycastle.pkcs.PKCS10CertificationRequest;
 import org.bouncycastle.pkcs.jcajce.JcaPKCS10CertificationRequest;
 import org.bouncycastle.pkcs.jcajce.JcaPKCS10CertificationRequestBuilder;
+import org.bouncycastle.util.CollectionStore;
+import org.bouncycastle.util.Store;
 import org.bouncycastle.x509.extension.X509ExtensionUtil;
 import x509.v3.CodeV3;
 
@@ -38,10 +44,8 @@ import java.security.cert.*;
 import java.security.cert.Certificate;
 import java.security.interfaces.DSAPublicKey;
 import java.security.interfaces.RSAPublicKey;
-import java.util.Collections;
-import java.util.Enumeration;
-import java.util.Set;
-import java.util.Vector;
+import java.security.spec.DSAPublicKeySpec;
+import java.util.*;
 
 import static org.bouncycastle.asn1.x500.style.RFC4519Style.c;
 import static org.bouncycastle.asn1.x500.style.RFC4519Style.l;
@@ -583,7 +587,6 @@ public class MyCode extends CodeV3 {
 
 
 
-    @Override
     public boolean importKeypair(String keyPairName, String keyStoreFilePath, String keyStorePassword) {
 
         try(FileInputStream fis = new FileInputStream(keyStoreFilePath)){
@@ -664,6 +667,14 @@ public class MyCode extends CodeV3 {
         return false;
     }
 
+    /**
+     *
+     * @param file naziv/putanja fajla gde zelimo da eksportujemo sertifikat
+     * @param certificateName naziv sertifikata koji eksportujemo
+     * @param encoding format fajla moze biti DER ili PEM
+     * @param format da li treba ukljuciti lanac ili ne
+     * @return true ako je operacija uspesno obavljena, false u suprotnom
+     */
     @Override
     public boolean exportCertificate(String file, String certificateName, int encoding, int format) {
 
@@ -707,6 +718,13 @@ public class MyCode extends CodeV3 {
         return false;
     }
 
+    /**
+     * Generise CSR za zadati sertifikat i cuva zahtev u fajlu zadatog naziva
+     * @param fileName putanja do fajla u koji zelimo da sacuvamo
+     * @param certificateName naziv sertifikata koji zelimo da potpisemo
+     * @param algorithm algoritam kojim enkriptujemo zahtev za potpis sertificata
+     * @return true ako je operacija uspesno obavljena, false u suprotnom
+     */
     @Override
     public boolean exportCSR(String fileName, String certificateName, String algorithm) {
         try(FileWriter fileWriter = new FileWriter(fileName)){
@@ -750,6 +768,11 @@ public class MyCode extends CodeV3 {
         return false;
     }
 
+    /**
+     * Importuje CSR u keystore i vraca opste informacije o subjektu CSR-a
+     * @param fileName putanja do fajla
+     * @return opste informacije o subjektu iz CSR-a
+     */
     @Override
     public String importCSR(String fileName) {
 
@@ -769,19 +792,211 @@ public class MyCode extends CodeV3 {
     }
 
     @Override
-    public boolean signCSR(String s, String s1, String s2) {
+    public boolean signCSR(String file, String keyPairName, String algorithm) {
+
+        try(FileOutputStream fos = new FileOutputStream(file)){
+
+
+            //============================================ SERTIFIKAT ZA POTPISIVANJE======================================
+            // Popunjavamo sertifikat podacima
+            StringBuilder stringBuilder = new StringBuilder();
+
+            stringBuilder.append("OU=").append(access.getSubjectOrganizationUnit());
+
+            stringBuilder.append(",O=").append(access.getSubjectOrganization());
+
+            stringBuilder.append(",L=").append(access.getSubjectLocality());
+
+            stringBuilder.append(",ST=").append(access.getSubjectState());
+
+            stringBuilder.append(",C=").append(access.getSubjectCountry());
+
+            stringBuilder.append(",CN=").append(access.getSubjectCommonName());
+
+            X500Name x500Name = new X500Name(stringBuilder.toString());
+
+
+            PublicKey csrPublicKey = (DSAPublicKey) new JcaPKCS10CertificationRequest(this.csr).setProvider(new BouncyCastleProvider()).getPublicKey();
+
+            X509v3CertificateBuilder certificateBuilder = new JcaX509v3CertificateBuilder(
+                    x500Name,
+                    new BigInteger(access.getSerialNumber()),
+                    access.getNotBefore(),
+                    access.getNotAfter(),
+                    this.csr.getSubject(),
+                    csrPublicKey
+
+            );
+
+
+            String dateOfBirth = access.getDateOfBirth();
+            String placeOfBirth = access.getSubjectDirectoryAttribute(Constants.POB);
+            String countryOfCitizenship = access.getSubjectDirectoryAttribute(Constants.COC);
+            String gender = access.getGender();
+
+            Vector<Attribute> attributes = new Vector<>();
+
+            if (dateOfBirth.length() > 0)
+                attributes.add(new Attribute(BCStyle.DATE_OF_BIRTH, new DERSet(new DERGeneralString(dateOfBirth))));
+
+            if (placeOfBirth.length() > 0)
+                attributes.add(new Attribute(BCStyle.PLACE_OF_BIRTH, new DERSet(new DERGeneralString(placeOfBirth))));
+
+            if (countryOfCitizenship.length() > 0)
+                attributes.add(new Attribute(BCStyle.COUNTRY_OF_CITIZENSHIP, new DERSet(new DERGeneralString(countryOfCitizenship))));
+
+            if (gender.length() > 0)
+                attributes.add(new Attribute(BCStyle.GENDER, new DERSet(new DERGeneralString(gender))));
+
+
+            if (attributes.size() != 0)
+                certificateBuilder.addExtension(Extension.subjectDirectoryAttributes,
+                        access.isCritical(Constants.SDA),
+                        new SubjectDirectoryAttributes(attributes)
+                );
+
+
+            boolean[] selectedKeyUsages = access.getKeyUsage();
+
+            int keyUsages = 0;
+
+            if (selectedKeyUsages[KEY_USAGE_DIGITAL_SIGNATURE])
+                keyUsages |= KeyUsage.digitalSignature;
+
+            if (selectedKeyUsages[KEY_USAGE_CONTENT_COMMITMENT])
+                keyUsages |= KeyUsage.nonRepudiation;
+
+            if (selectedKeyUsages[KEY_USAGE_KEY_ENCIPHERMENT])
+                keyUsages |= KeyUsage.keyEncipherment;
+
+            if (selectedKeyUsages[KEY_USAGE_DATA_ENCIPHERMENT])
+                keyUsages |= KeyUsage.dataEncipherment;
+
+            if (selectedKeyUsages[KEY_USAGE_KEY_AGREEMENT])
+                keyUsages |= KeyUsage.keyAgreement;
+
+            if (selectedKeyUsages[KEY_USAGE_CERTIFICATE_SIGNING])
+                keyUsages |= KeyUsage.keyCertSign;
+
+            if (selectedKeyUsages[KEY_USAGE_CRL_SIGNING])
+                keyUsages |= KeyUsage.cRLSign;
+
+            if (selectedKeyUsages[KEY_USAGE_ENCIPHER_ONLY])
+                keyUsages |= KeyUsage.encipherOnly;
+
+            if (selectedKeyUsages[KEY_USAGE_DECIPHER_ONLY])
+                keyUsages |= KeyUsage.decipherOnly;
+
+
+
+            KeyUsage keyUsage = new KeyUsage(keyUsages);
+
+
+            certificateBuilder.addExtension(Extension.keyUsage,
+                    access.isCritical(Constants.KU),
+                    keyUsage);
+
+            int pathLen = 0;
+
+            if (access.getPathLen().length() > 0)
+                Integer.parseInt(access.getPathLen());
+
+            boolean isCA = access.isCA();
+
+            BasicConstraints basicConstraints;
+
+            if(isCA)
+                basicConstraints = new BasicConstraints(pathLen);
+            else
+                basicConstraints = new BasicConstraints(false);
+
+
+            certificateBuilder.addExtension(Extension.basicConstraints,
+                    access.isCritical(Constants.BC),
+                    basicConstraints
+            );
+
+            //=============================================================================
+
+
+            // potpis
+            ContentSigner signer = new JcaContentSignerBuilder(algorithm).build((PrivateKey) keyStore.getKey(keyPairName, KEYSTORE_PASSWORD.toCharArray()));
+
+            // izgradmo sertifikat za potpisivanje
+            X509Certificate signedCertificate = new JcaX509CertificateConverter().getCertificate(certificateBuilder.build(signer));
+
+            // nekoliko klasa zarad popunjavanja fajla formata PKCS7
+            CMSSignedDataGenerator cmsSignedDataGenerator = new CMSSignedDataGenerator();
+
+            List<JcaX509CertificateHolder> certificateChain = new ArrayList<>();
+
+            CMSTypedData cmsTypedData = new CMSProcessableByteArray(signedCertificate.getEncoded());
+
+            certificateChain.add(new JcaX509CertificateHolder(signedCertificate));
+
+            for(Certificate certificate :  keyStore.getCertificateChain(keyPairName))
+                certificateChain.add(new JcaX509CertificateHolder((X509Certificate) certificate));
+
+            cmsSignedDataGenerator.addCertificates(new CollectionStore(certificateChain));
+
+            CMSSignedData cmsSignedData = cmsSignedDataGenerator.generate(cmsTypedData);
+
+            fos.write(cmsSignedData.getEncoded());
+
+            return true;
+        } catch (IOException | KeyStoreException | NoSuchAlgorithmException | InvalidKeyException | UnrecoverableKeyException | OperatorCreationException | CertificateException | CMSException e) {
+            e.printStackTrace();
+        }
         return false;
     }
 
     @Override
-    public boolean importCAReply(String s, String s1) {
+    public boolean importCAReply(String file, String keyPairName) {
+
+        try (FileInputStream fis = new FileInputStream(file)) {
+            // format je CMS/PKCS7
+            CMSSignedData signature = new CMSSignedData(fis);
+
+            // vid za dohvatanja sertifikata
+            Store<X509CertificateHolder> store = signature.getCertificates();
+
+            Collection<X509CertificateHolder> certificateHolders = store.getMatches(null);
+
+            X509Certificate[] certificateChain = new X509Certificate[certificateHolders.size()];
+
+            // samo da znamo gde upisujemo sertifikat
+            int i = 0;
+
+            // iteriramo kroz lanac i dohvatamo sve sertifikate u lancu
+            for (X509CertificateHolder holder : certificateHolders)
+                certificateChain[i++] = new JcaX509CertificateConverter().setProvider(new BouncyCastleProvider()).getCertificate(holder);
+
+            // privatni kljuc za koji je sertifikat vezan
+            PrivateKey privateKey = (PrivateKey) keyStore.getKey(keyPairName, KEYSTORE_PASSWORD.toCharArray());
+
+            // sacuvamo izmene
+            keyStore.setKeyEntry(keyPairName, privateKey, KEYSTORE_PASSWORD.toCharArray(), certificateChain);
+
+            saveKeyStore();
+
+            return true;
+        } catch (IOException | KeyStoreException | CertificateException | NoSuchAlgorithmException | UnrecoverableKeyException | CMSException e) {
+            e.printStackTrace();
+        }
+
         return false;
     }
 
+    /**
+     * Funkcija koja proverava da li sertifikat sa zadatim imenom sme da potpisuje Certificate Sign Request
+     * @param certificateName naziv sertifikata
+     * @return true ako sme da potpise CSR, false u suprotnom ili u slucaju greske
+     */
     @Override
     public boolean canSign(String certificateName) {
 
         try {
+            // verovatno treba dohvatati i key usage i videti za sta se koristi
             // moze da potpise samo ukoliko je CA
             return ((X509Certificate)keyStore.getCertificate(certificateName)).getBasicConstraints() != -1;
         } catch (KeyStoreException e) {
