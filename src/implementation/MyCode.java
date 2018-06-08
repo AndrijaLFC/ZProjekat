@@ -17,20 +17,27 @@ import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateHolder;
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.openssl.PEMParser;
 import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.OperatorCreationException;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
+import org.bouncycastle.pkcs.PKCS10CertificationRequest;
+import org.bouncycastle.pkcs.jcajce.JcaPKCS10CertificationRequest;
+import org.bouncycastle.pkcs.jcajce.JcaPKCS10CertificationRequestBuilder;
 import org.bouncycastle.x509.extension.X509ExtensionUtil;
 import x509.v3.CodeV3;
 
 import javax.naming.InvalidNameException;
 import javax.naming.ldap.LdapName;
+import javax.security.auth.x500.X500Principal;
 import java.io.*;
 import java.math.BigInteger;
 import java.security.*;
 import java.security.cert.*;
 import java.security.cert.Certificate;
+import java.security.interfaces.DSAPublicKey;
+import java.security.interfaces.RSAPublicKey;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.Set;
@@ -86,7 +93,10 @@ public class MyCode extends CodeV3 {
 
 
     private KeyStore keyStore;
-    
+
+
+    private PKCS10CertificationRequest csr = null;
+
     public MyCode(boolean[] algorithm_conf, boolean[] extensions_conf, boolean extensions_rules) throws GuiException {
         super(algorithm_conf, extensions_conf, extensions_rules);
     }
@@ -247,7 +257,7 @@ public class MyCode extends CodeV3 {
                 certificateBuilder.addExtension(Extension.subjectDirectoryAttributes,
                         access.isCritical(Constants.SDA),
                         new SubjectDirectoryAttributes(attributes)
-                        );
+                );
 
         } catch (CertIOException e) {
             e.printStackTrace();
@@ -479,7 +489,7 @@ public class MyCode extends CodeV3 {
 
             // verujemo da je trusted ukoliko je sertifikat/keypair CA
             if (basicConstraints != -1)
-               return KEYPAIR_TRUSTED_CERT;
+                return KEYPAIR_TRUSTED_CERT;
 
 
 
@@ -706,12 +716,63 @@ public class MyCode extends CodeV3 {
     }
 
     @Override
-    public boolean exportCSR(String s, String s1, String s2) {
+    public boolean exportCSR(String fileName, String certificateName, String algorithm) {
+        try(FileWriter fileWriter = new FileWriter(fileName)){
+            // sertifikat za koji hocemo da generisemo zahtev za potpisivanje
+            X509Certificate certificate = (X509Certificate) keyStore.getCertificate(certificateName);
+
+            // builder za CSR
+            JcaPKCS10CertificationRequestBuilder p10Builder = new JcaPKCS10CertificationRequestBuilder(
+                    certificate.getSubjectX500Principal(),
+                    certificate.getPublicKey()
+            );
+
+            // kojim algoritmom potpisujemo zahtev
+            JcaContentSignerBuilder csBuilder = new JcaContentSignerBuilder(algorithm);
+
+            // privatni kljuc kojim cemo potpisati zahtev
+            PrivateKey privateKey = (PrivateKey) keyStore.getKey(certificateName, KEYSTORE_PASSWORD.toCharArray());
+
+            // potpisivac zahteva
+            ContentSigner signer = csBuilder.build(privateKey);
+
+            // zahtev za potpisivanje
+            PKCS10CertificationRequest csr = p10Builder.build(signer);
+
+            // ispisujemo u pem formatu
+            JcaPEMWriter pemWriter = new JcaPEMWriter(fileWriter);
+
+            // upisujemo u fajl
+            pemWriter.writeObject(csr);
+
+            // zatvaramo tok
+            pemWriter.close();
+
+            // moram zapamtiti trenutni
+            this.csr = csr;
+            // vratimo uspesnot operacije
+            return true;
+        } catch (IOException | KeyStoreException | UnrecoverableKeyException | OperatorCreationException | NoSuchAlgorithmException e) {
+            e.printStackTrace();
+        }
         return false;
     }
 
     @Override
-    public String importCSR(String s) {
+    public String importCSR(String fileName) {
+
+        try(FileReader pemReader = new FileReader(fileName)){
+            PEMParser pemParser = new PEMParser(pemReader);
+
+            // procitamo sertifikat
+            PKCS10CertificationRequest csr = (PKCS10CertificationRequest) pemParser.readObject();
+
+            // vratimo podatke o podnosiocu zahteva
+            return csr.getSubject().toString();
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
         return null;
     }
 
@@ -726,22 +787,64 @@ public class MyCode extends CodeV3 {
     }
 
     @Override
-    public boolean canSign(String s) {
+    public boolean canSign(String certificateName) {
+
+        try {
+            // moze da potpise samo ukoliko je CA
+            return ((X509Certificate)keyStore.getCertificate(certificateName)).getBasicConstraints() != -1;
+        } catch (KeyStoreException e) {
+            e.printStackTrace();
+        }
+
         return false;
     }
 
     @Override
-    public String getSubjectInfo(String s) {
+    public String getSubjectInfo(String certificateName) {
+
+
+        try {
+            X509Certificate certificate = (X509Certificate) keyStore.getCertificate(certificateName);
+
+            String subjectInfo = certificate.getSubjectDN().toString();
+
+            // vratimo subject info formatiran kako treba
+            return subjectInfo.replaceAll(", ", ",")
+                    .replaceAll("=,", "= ,")
+                    .replaceAll("  ", " ");
+        } catch (KeyStoreException e) {
+            e.printStackTrace();
+        }
         return null;
     }
 
     @Override
-    public String getCertPublicKeyAlgorithm(String s) {
+    public String getCertPublicKeyAlgorithm(String certificateName) {
+
+        try {
+            // vratimo algoritam javnog kljuca sertifikata
+            return keyStore.getCertificate(certificateName).getPublicKey().getAlgorithm();
+        } catch (KeyStoreException e) {
+            e.printStackTrace();
+        }
         return null;
     }
 
     @Override
-    public String getCertPublicKeyParameter(String s) {
+    public String getCertPublicKeyParameter(String certificateName) {
+
+        try {
+            // dohvatimo javni kljuc sertifikata
+            PublicKey publicKey = keyStore.getCertificate(certificateName).getPublicKey();
+
+            // proverimo koji je algoritam u pitanju i vratiom duzinu kljuca
+            if (publicKey instanceof DSAPublicKey)
+                return ((DSAPublicKey) publicKey).getY().bitLength() + "";
+            else if (publicKey instanceof RSAPublicKey)
+                return ((RSAPublicKey) publicKey).getModulus().bitLength() + "";
+        } catch (KeyStoreException e) {
+            e.printStackTrace();
+        }
         return null;
     }
 }
