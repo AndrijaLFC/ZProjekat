@@ -452,7 +452,7 @@ public class MyCode extends CodeV3 {
     /**
      * Metoda koja ucita sve informacije vezane za par kljuceva/ sertifikat i vraca da li je sertifikat potpisan ili ne
      * @param keyPairName naziv para kljuca/sertifikata koji prikazujemo
-     * @return vraca 0 ako je sertifikat nepotpisan, 1 ako je potpisan od strane neproverenog Ca, 2 ako je potpisan od strane proverenog CA
+     * @return vraca 0 ako je sertifikat nepotpisan, 1 ako je potpisan od strane CA, 2 ako je u pitanju CA
      */
     @Override
     public int loadKeypair(String keyPairName) {
