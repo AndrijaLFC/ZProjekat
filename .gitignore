@@ -37,6 +37,13 @@ logs/
 # mpeltonen/sbt-idea plugin
 .idea_modules/
 
+
+# ZProjekat
+*.p12
+*.csr
+*.cer
+*.p7b
+
 # JIRA plugin
 atlassian-ide-plugin.xml
 

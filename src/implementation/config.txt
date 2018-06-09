@@ -1,4 +1,5 @@
 DSA
+RSA
 key usage
 subject directory attributes
 basic constraints

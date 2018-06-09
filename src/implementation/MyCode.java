@@ -7,7 +7,6 @@ import gui.Constants;
 import org.bouncycastle.asn1.DERGeneralString;
 import org.bouncycastle.asn1.DERSet;
 import org.bouncycastle.asn1.x500.X500Name;
-import org.bouncycastle.asn1.x500.style.BCStrictStyle;
 import org.bouncycastle.asn1.x500.style.BCStyle;
 import org.bouncycastle.asn1.x509.*;
 import org.bouncycastle.asn1.x509.Extension;
@@ -18,8 +17,6 @@ import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateHolder;
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
 import org.bouncycastle.cms.*;
-import org.bouncycastle.crypto.params.DSAKeyParameters;
-import org.bouncycastle.crypto.util.PublicKeyFactory;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.openssl.PEMParser;
 import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
@@ -33,10 +30,10 @@ import org.bouncycastle.util.CollectionStore;
 import org.bouncycastle.util.Store;
 import org.bouncycastle.x509.extension.X509ExtensionUtil;
 import x509.v3.CodeV3;
+import x509.v3.GuiV3;
 
 import javax.naming.InvalidNameException;
 import javax.naming.ldap.LdapName;
-import javax.security.auth.x500.X500Principal;
 import java.io.*;
 import java.math.BigInteger;
 import java.security.*;
@@ -44,12 +41,7 @@ import java.security.cert.*;
 import java.security.cert.Certificate;
 import java.security.interfaces.DSAPublicKey;
 import java.security.interfaces.RSAPublicKey;
-import java.security.spec.DSAPublicKeySpec;
 import java.util.*;
-
-import static org.bouncycastle.asn1.x500.style.RFC4519Style.c;
-import static org.bouncycastle.asn1.x500.style.RFC4519Style.l;
-import static org.bouncycastle.asn1.x500.style.RFC4519Style.st;
 
 public class MyCode extends CodeV3 {
 
@@ -96,6 +88,8 @@ public class MyCode extends CodeV3 {
     private static final int KEY_USAGE_DECIPHER_ONLY = 8;
 
 
+    private static final Provider BCProvider = new BouncyCastleProvider();
+
     private KeyStore keyStore;
 
 
@@ -106,6 +100,9 @@ public class MyCode extends CodeV3 {
     }
 
 
+    /**
+     * Metoda koja sacuva trenutno stanje keystore-a u fajl formata PKCS12
+     */
     private void saveKeyStore(){
         // ako je keystore null nema sta da radimo
         if (keyStore == null)
@@ -121,6 +118,12 @@ public class MyCode extends CodeV3 {
     }
 
 
+    /**
+     * Sacuva trenutno stanje zadatog keystore-a u zadati fajl zasticen zadatom sifrom
+     * @param keyStore keyStore koji cuvamo
+     * @param filePath naziv fajla u koji cuvamo
+     * @param password sifra fajla
+     */
     private void saveKeyStore(KeyStore keyStore, String filePath, String password){
 
         try(FileOutputStream fos = new FileOutputStream(filePath)){
@@ -130,36 +133,54 @@ public class MyCode extends CodeV3 {
         }
     }
 
+
+    /**
+     * Reformatira osnovne podatke o sertifikatu zarad ispunjavanja specifikacije GUI-a
+     * @param basicInformation informacija o sertifikatu za formatiranje
+     * @return formatirane informacije o sertifikatu za GUI
+     */
+    private String reformatBasicCertInfo(String basicInformation){
+        return basicInformation.replaceAll(", ", ",")
+                .replaceAll("=,", "= ,")
+                .replaceAll("  ", " ");
+    }
+
+
+    /**
+     * Metoda koja ucita u GUI osnovne podatke o sertifikatu
+     * @param certificate sertifikat iz kojeg citamo
+     * @param issuer sertifikat koji ga je potpisao/izdao
+     */
     private void loadBasicCertificateInfo(@NotNull X509Certificate certificate, @Nullable X509Certificate issuer){
 
-        access.setPublicKeyAlgorithm(certificate.getSigAlgName());
+        // algoritam kojim sertifikat potpisuje
+        access.setSubjectSignatureAlgorithm(certificate.getPublicKey().getAlgorithm());
 
-        access.setSubjectSignatureAlgorithm(certificate.getSigAlgName());
-
+        // serijski broj sertifikata
         access.setSerialNumber(certificate.getSerialNumber().toString());
 
+        // datum pocetka vazenja
         access.setNotBefore(certificate.getNotBefore());
 
+        // datum kraja vazenja
         access.setNotAfter(certificate.getNotAfter());
 
+        // verzija sertifikata
         access.setVersion(certificate.getVersion() == 3? VERSION_3_CODE : VERSION_1_CODE);
 
-        access.setPublicKeyParameter(certificate.getPublicKey() + "");
+        // parametri javnog kljuca sertifikata
+        access.setPublicKeyParameter(certificate.getPublicKey().toString());
 
-        access.setPublicKeyParameter("test");
+        // osnovni podaci o izdavacu sertifikata
+        String issuerName = certificate.getIssuerDN().toString();
 
-        String issuerName = certificate.getIssuerDN().toString() + " ";
+        // prikaz osnovnih podataka izdavaca
+        // dodajemo space karakter da bi mogli da formatiramo lepo issuer-a za GUI
+        access.setIssuer(reformatBasicCertInfo(issuerName + " "));
 
-        access.setIssuer(issuerName
-                .replaceAll(", ", ",")
-                .replaceAll("=,", "= ,")
-                .replaceAll("  ", " "));
-
-        if (issuer != null)
-            access.setIssuerSignatureAlgorithm(issuer.getSigAlgName());
-        else
-            access.setIssuerSignatureAlgorithm(certificate.getSigAlgName());
-
+        // algoritam za potpisivanje izdavaca
+        access.setIssuerSignatureAlgorithm(certificate.getSigAlgName());
+        // citanje osnovnih podataka O sertifikatu
         try {
             LdapName ldapName = new LdapName(certificate.getSubjectDN().toString());
 
@@ -193,40 +214,13 @@ public class MyCode extends CodeV3 {
         } catch (InvalidNameException e) {
             e.printStackTrace();
         }
-
-
-        //access.setPublicKeyParameter();
-
     }
 
-
-    private X509Certificate generateCertificate(KeyPair keyPair){
-        StringBuilder stringBuilder = new StringBuilder();
-
-        stringBuilder.append("OU=").append(access.getSubjectOrganizationUnit());
-
-        stringBuilder.append(",O=").append(access.getSubjectOrganization());
-
-        stringBuilder.append(",L=").append(access.getSubjectLocality());
-
-        stringBuilder.append(",ST=").append(access.getSubjectState());
-
-        stringBuilder.append(",C=").append(access.getSubjectCountry());
-
-        stringBuilder.append(",CN=").append(access.getSubjectCommonName());
-
-        X500Name x500Name = new X500Name(stringBuilder.toString());
-
-        X509v3CertificateBuilder certificateBuilder = new JcaX509v3CertificateBuilder(
-                x500Name,
-                new BigInteger(access.getSerialNumber()),
-                access.getNotBefore(),
-                access.getNotAfter(),
-                x500Name,
-                keyPair.getPublic()
-        );
-
-
+    /**
+     * Ucitava ekstenzije sertifikata u skladisti ih u zadati certificateBuilder
+     * @param certificateBuilder certificateBuilder u koji smestamo podatke
+     */
+    private void loadCertificateExtensions(X509v3CertificateBuilder certificateBuilder){
         String dateOfBirth = access.getDateOfBirth();
         String placeOfBirth = access.getSubjectDirectoryAttribute(Constants.POB);
         String countryOfCitizenship = access.getSubjectDirectoryAttribute(Constants.COC);
@@ -259,7 +253,9 @@ public class MyCode extends CodeV3 {
         }
 
 
-
+        //===================================================================================
+        //========================== Popunjavanje koriscenja kljuca =========================
+        //===================================================================================
         boolean[] selectedKeyUsages = access.getKeyUsage();
 
         int keyUsages = 0;
@@ -292,7 +288,6 @@ public class MyCode extends CodeV3 {
             keyUsages |= KeyUsage.decipherOnly;
 
 
-
         KeyUsage keyUsage = new KeyUsage(keyUsages);
 
         try {
@@ -303,6 +298,10 @@ public class MyCode extends CodeV3 {
             e.printStackTrace();
         }
 
+
+        //===================================================================================
+        //========================== Popunjavanje opstih ogranicenja ========================
+        //===================================================================================
         int pathLen = 0;
 
         if (access.getPathLen().length() > 0)
@@ -327,6 +326,53 @@ public class MyCode extends CodeV3 {
             e.printStackTrace();
         }
 
+    }
+
+    /**
+     * Metoda koja generise sertifikat sa zadatim parom kljuceva
+     * Informacije o sertifikatu se dohvataju iz GUI-a aplikacije
+     * @param keyPair par kljuceva sertifikata
+     * @return vraca izgenerisani i potpisani sertifikat
+     */
+    private X509Certificate generateCertificate(KeyPair keyPair){
+
+
+        //===================================================================================
+        //========================== Popunjavanje opstih podataka ===========================
+        //===================================================================================
+
+        StringBuilder stringBuilder = new StringBuilder();
+
+        stringBuilder.append("OU=").append(access.getSubjectOrganizationUnit());
+
+        stringBuilder.append(",O=").append(access.getSubjectOrganization());
+
+        stringBuilder.append(",L=").append(access.getSubjectLocality());
+
+        stringBuilder.append(",ST=").append(access.getSubjectState());
+
+        stringBuilder.append(",C=").append(access.getSubjectCountry());
+
+        stringBuilder.append(",CN=").append(access.getSubjectCommonName());
+
+        X500Name x500Name = new X500Name(stringBuilder.toString());
+
+        X509v3CertificateBuilder certificateBuilder = new JcaX509v3CertificateBuilder(
+                x500Name,
+                new BigInteger(access.getSerialNumber()),
+                access.getNotBefore(),
+                access.getNotAfter(),
+                x500Name,
+                keyPair.getPublic()
+        );
+
+        // ucitavamo ekstenzije
+        loadCertificateExtensions(certificateBuilder);
+
+        //===================================================================================
+        //============================ Potpisivanje sertifikata  ============================
+        //===================================================================================
+
         try {
             ContentSigner signer = new JcaContentSignerBuilder(access.getPublicKeyDigestAlgorithm())
                     .build(keyPair.getPrivate());
@@ -340,6 +386,11 @@ public class MyCode extends CodeV3 {
         return null;
     }
 
+
+    /**
+     * Ucitava sve sertifikate/parove kljuceva koji su sacuvani u fajlu KEYSTORE_NAME
+     * @return vraca nazive svih sertifikata/parova kljuceva u fajlu
+     */
     @Override
     public Enumeration<String> loadLocalKeystore() {
 
@@ -348,7 +399,7 @@ public class MyCode extends CodeV3 {
 
         try {
             // dohvatimo keystore
-            keyStore =  KeyStore.getInstance(KEYSTORE_TYPE, new BouncyCastleProvider());
+            keyStore =  KeyStore.getInstance(KEYSTORE_TYPE, BCProvider);
 
             // fajl sa svim kljucevima
             File keyStoreFile = new File(KEYSTORE_NAME);
@@ -377,6 +428,9 @@ public class MyCode extends CodeV3 {
         return null;
     }
 
+    /**
+     * Isprazni sav sadrzaj keystore-a i novo stanje sacuva u fajl
+     */
     @Override
     public void resetLocalKeystore() {
         try {
@@ -395,6 +449,11 @@ public class MyCode extends CodeV3 {
         }
     }
 
+    /**
+     * Metoda koja ucita sve informacije vezane za par kljuceva/ sertifikat i vraca da li je sertifikat potpisan ili ne
+     * @param keyPairName naziv para kljuca/sertifikata koji prikazujemo
+     * @return vraca 0 ako je sertifikat nepotpisan, 1 ako je potpisan od strane neproverenog Ca, 2 ako je potpisan od strane proverenog CA
+     */
     @Override
     public int loadKeypair(String keyPairName) {
 
@@ -420,6 +479,11 @@ public class MyCode extends CodeV3 {
             if (criticalExtensions == null)
                 criticalExtensions = Collections.EMPTY_SET;
 
+
+
+            //===================================================================================
+            //========================== Oznacavanje kriticnih podataka =========================
+            //===================================================================================
             boolean keyUsageCritical = false;
             boolean subjectDirectoryAttributesCritical = false;
             boolean basicConstraintCritical = false;
@@ -434,12 +498,22 @@ public class MyCode extends CodeV3 {
             }
 
 
+
+            //===================================================================================
+            //========================== Ucitavanje koriscenja kljuca ===========================
+            //===================================================================================
             boolean[] keyUsage = certificate.getKeyUsage();
 
             if (keyUsage != null)
                 access.setKeyUsage(keyUsage);
             else if (keyUsageCritical)
                 return KEYPAIR_ERROR_CODE;
+
+
+
+            //===================================================================================
+            //==========================      Ucitavanje SDA      ===============================
+            //===================================================================================
 
             byte[] sdaBytes = certificate.getExtensionValue(Extension.subjectDirectoryAttributes.toString());
 
@@ -470,6 +544,12 @@ public class MyCode extends CodeV3 {
                 }
             }
 
+
+
+            //===================================================================================
+            //========================== Ucitavanje opstih ogranicenja ==========================
+            //===================================================================================
+
             // dobijamo kolika je maksimalna duzina puta
             // duzina puta je jedino prisutna kod sertifikata koji su CA
             int basicConstraints = certificate.getBasicConstraints();
@@ -481,6 +561,12 @@ public class MyCode extends CodeV3 {
 
             // namestamo odgovarajuce podatke na gui
             access.setCA(basicConstraints != -1);
+
+
+
+            //===================================================================================
+            //======================= Provera da li je potpisan/nepotpisan ======================
+            //===================================================================================
 
             // verujemo da je trusted ukoliko je sertifikat/keypair CA
             if (basicConstraints != -1)
@@ -496,40 +582,48 @@ public class MyCode extends CodeV3 {
 
             // sertifikat je trusted ukoliko ga je potpisao neko
             // od lokalnih CA
-            if (keyStore.isCertificateEntry(keyPairName)){
+            // izgleda da su samo CA trusted sertifikati, stoga ova provera nije potrebna
+            // ali ostavicu ovaj kod ovde u slucaju da zatreba
+            /*
+            Enumeration<String> enumeration = keyStore.aliases();
 
-                Enumeration<String> enumeration = keyStore.aliases();
+            while(enumeration.hasMoreElements()){
+                String key = enumeration.nextElement();
 
-                while(enumeration.hasMoreElements()){
-                    String key = enumeration.nextElement();
+                if (key.equals(keyPairName))
+                    continue;
 
-                    if (key.equals(keyPairName))
-                        continue;
+                X509Certificate x509Certificate = (X509Certificate) keyStore.getCertificate(key);
 
-                    X509Certificate x509Certificate = (X509Certificate) keyStore.getCertificate(key);
+                try {
+                    certificate.verify(x509Certificate.getPublicKey(), BCProvider);
 
-                    try {
-                        certificate.verify(x509Certificate.getPublicKey());
+                    //x509Certificate.verify(certificate.getPublicKey(), BCProvider);
 
-                        return KEYPAIR_TRUSTED_CERT;
-                    } catch (CertificateException | NoSuchAlgorithmException | NoSuchProviderException | SignatureException | InvalidKeyException e) {
+                    return KEYPAIR_TRUSTED_CERT;
+                } catch (CertificateException | NoSuchAlgorithmException | SignatureException | InvalidKeyException e) {
 
-                    }
                 }
 
-            }
+            }*/
 
-            // ovde dolazimo ako je sertifikat potpisan od nekog CA
-            // kome mi licno ne verujemo, sertifikat je potpisan ali nije proveren
+            // sertifikat je potpisan od strane CA
             return KEYPAIR_SIGNED_CODE;
         } catch (KeyStoreException | IOException e) {
             e.printStackTrace();
         }
 
-
+        // ovde dolazimo samo ako je doslo do neke greske
         return KEYPAIR_ERROR_CODE;
     }
 
+
+    /**
+     * Cuva unete informacije o sertifikatu/paru kljuceva i skladisti ih u keystore pod zadatim imenom
+     * @param keyPairName naziv pod kojim cuvamo novogenerisani sertifikat/par kljuceva
+     * @return true ako je operacija uspesno obavljena, false u slucaju da vec postoji zadati par kljuceva/sertifikat
+     * sa tim imenom ili je doslo do neke greske
+     */
     @Override
     public boolean saveKeypair(String keyPairName) {
 
@@ -539,31 +633,40 @@ public class MyCode extends CodeV3 {
                 return false;
 
             // kreiramo instancu generatora kljuceva
-            KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance(access.getPublicKeyAlgorithm());
+            KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance(access.getPublicKeyAlgorithm(), BCProvider);
 
+            // inicijalizujemo generator kljuceva
             keyPairGenerator.initialize(Integer.parseInt(access.getPublicKeyParameter()));
 
-            System.out.println(access.getPublicKeyParameter());
-
+            // generisemo par kljuceva
             KeyPair keyPair = keyPairGenerator.generateKeyPair();
 
+            // napravimo sertifikat
             X509Certificate x509Certificate = generateCertificate(keyPair);
 
-
+            // sacuvamo sertifikat u keystore
             keyStore.setKeyEntry(keyPairName, keyPair.getPrivate(),
                     KEYSTORE_PASSWORD.toCharArray(),
                     new X509Certificate[]{x509Certificate});
 
+            // sacuvamo novo stanje keystore-a u fajl
             saveKeyStore();
 
             return true;
         } catch (KeyStoreException | NoSuchAlgorithmException e) {
             e.printStackTrace();
+
+            GuiV3.reportError(e);
         }
 
         return false;
     }
 
+    /**
+     * Uklanja zadati par kljuceva/sertifikat iz keystore-a
+     * @param keyPairName  naziv para kljuceva/sertifikata koji se brise
+     * @return true ukoliko je operacija uspesna, false u suprotnom
+     */
     @Override
     public boolean removeKeypair(String keyPairName) {
 
@@ -578,6 +681,7 @@ public class MyCode extends CodeV3 {
             return true;
         } catch (KeyStoreException e) {
             e.printStackTrace();
+            GuiV3.reportError(e);
         }
 
         // ukoliko je doslo do neke greske pri brisanju iz keystore-a
@@ -586,10 +690,24 @@ public class MyCode extends CodeV3 {
     }
 
 
-
+    /**
+     * Ucitava iz zadatog fajla par kljuceva i cuva ga u keystore sa zadatim imenom
+     * @param keyPairName naziv para kljuceva koji cemo da sacuvamo u keystore
+     * @param keyStoreFilePath putanja do fajla para kljuceva
+     * @param keyStorePassword sifra fajla para kljuceva
+     * @return true ukoliko je operacija uspesna, false u suprotnom
+     */
+    @Override
     public boolean importKeypair(String keyPairName, String keyStoreFilePath, String keyStorePassword) {
 
+
         try(FileInputStream fis = new FileInputStream(keyStoreFilePath)){
+            // ukoliko vec postoji par kljuceva/sertifikat sa zadatim imenom ispisati gresku i vratiti se
+            if (keyStore.containsAlias(keyPairName)){
+                GuiV3.reportError("Vec postoji par kljuceva/sertifikat sa zadatim imenom");
+                return false;
+            }
+
             // otvorimo udaljeni keystore
             KeyStore remoteKeyStore = KeyStore.getInstance(KEYSTORE_TYPE, new BouncyCastleProvider());
 
@@ -604,6 +722,7 @@ public class MyCode extends CodeV3 {
             // sacuvamo entry
             keyStore.setKeyEntry(keyPairName, key, keyStorePassword.toCharArray(), remoteKeyStore.getCertificateChain(alias));
 
+            // sacuvamo novo stanje keystore-a
             saveKeyStore();
 
             return true;
@@ -614,11 +733,18 @@ public class MyCode extends CodeV3 {
         return false;
     }
 
+    /**
+     * Sacuva odabrani par kljuceva u zadati fajl sa zadatom sifrom
+     * @param keyPairName naziv para kljuceva koji zelimo da sacuvamo u fajlu
+     * @param filePath naziv/putanja fajla
+     * @param password sifra fajla
+     * @return true ukoliko je operacija uspesna, false u suprotnom
+     */
     @Override
     public boolean exportKeypair(String keyPairName, String filePath, String password){
 
         try {
-            KeyStore remoteKeyStore = KeyStore.getInstance(KEYSTORE_TYPE, new BouncyCastleProvider());
+            KeyStore remoteKeyStore = KeyStore.getInstance(KEYSTORE_TYPE, BCProvider);
 
             // dohvatimo lanac sertifikata para kljuceva koje zelimo da eksportujemo
             Certificate[] chain = keyStore.getCertificateChain(keyPairName);
@@ -639,16 +765,30 @@ public class MyCode extends CodeV3 {
             return true;
         } catch (KeyStoreException | NoSuchAlgorithmException | CertificateException | IOException | UnrecoverableKeyException e) {
             e.printStackTrace();
+            GuiV3.reportError(e);
         }
         // vracamo false ukoliko je doslo do neke greske
         return false;
     }
 
 
+    /**
+     *
+     * @param filePath putanja do fajla u kojem se nalazi sertifikat
+     * @param certificateName naziv pod kojim zelimo da sacuvamo sertifikat u keystore
+     * @return true ako je operacija uspesna, false u suprotnom
+     */
     @Override
     public boolean importCertificate(String filePath, String certificateName) {
 
         try(FileInputStream fis = new FileInputStream(filePath)){
+
+            // proverimo da li vec postoji, ako postoji vratimo false
+            if (keyStore.containsAlias(certificateName)){
+                GuiV3.reportError("Vec postoji sertifikat/par kljuceva sa zadatim imenom");
+
+                return false;
+            }
             // izgenerisemo sertifikat
             X509Certificate importedCertificate = (X509Certificate) CertificateFactory
                     .getInstance(X509_CERTIFICATE_TYPE)
@@ -662,6 +802,7 @@ public class MyCode extends CodeV3 {
             return true;
         } catch (IOException | CertificateException | KeyStoreException e) {
             e.printStackTrace();
+            GuiV3.reportError(e);
         }
 
         return false;
@@ -738,7 +879,7 @@ public class MyCode extends CodeV3 {
             );
 
             // kojim algoritmom potpisujemo zahtev
-            JcaContentSignerBuilder csBuilder = new JcaContentSignerBuilder(algorithm);
+            JcaContentSignerBuilder csBuilder = new JcaContentSignerBuilder(algorithm).setProvider(BCProvider);
 
             // privatni kljuc kojim cemo potpisati zahtev
             PrivateKey privateKey = (PrivateKey) keyStore.getKey(certificateName, KEYSTORE_PASSWORD.toCharArray());
@@ -758,8 +899,6 @@ public class MyCode extends CodeV3 {
             // zatvaramo tok
             pemWriter.close();
 
-            // moram zapamtiti trenutni
-            this.csr = csr;
             // vratimo uspesnot operacije
             return true;
         } catch (IOException | KeyStoreException | UnrecoverableKeyException | OperatorCreationException | NoSuchAlgorithmException e) {
@@ -782,145 +921,53 @@ public class MyCode extends CodeV3 {
             // procitamo sertifikat
             PKCS10CertificationRequest csr = (PKCS10CertificationRequest) pemParser.readObject();
 
-            // vratimo podatke o podnosiocu zahteva
-            return csr.getSubject().toString();
+            // zapamtimo trenutni csr
+            this.csr = csr;
+
+            // vratimo podatke o podnosiocu zahteva formatirano po postavci zadatka
+            return reformatBasicCertInfo(csr.getSubject().toString());
 
         } catch (IOException e) {
             e.printStackTrace();
         }
-        return null;
+        return "";
     }
 
     @Override
-    public boolean signCSR(String file, String keyPairName, String algorithm) {
+    public boolean signCSR(String file, String certificateIssuerName, String algorithm) {
 
         try(FileOutputStream fos = new FileOutputStream(file)){
 
 
+            if (access.getVersion() != VERSION_3_CODE){
+                GuiV3.reportError("Podrzani su samo sertifikati verzije 3");
+                return false;
+            }
+
             //============================================ SERTIFIKAT ZA POTPISIVANJE======================================
             // Popunjavamo sertifikat podacima
-            StringBuilder stringBuilder = new StringBuilder();
 
-            stringBuilder.append("OU=").append(access.getSubjectOrganizationUnit());
+            PublicKey csrPublicKey = new JcaPKCS10CertificationRequest(this.csr).setProvider(BCProvider).getPublicKey();
 
-            stringBuilder.append(",O=").append(access.getSubjectOrganization());
-
-            stringBuilder.append(",L=").append(access.getSubjectLocality());
-
-            stringBuilder.append(",ST=").append(access.getSubjectState());
-
-            stringBuilder.append(",C=").append(access.getSubjectCountry());
-
-            stringBuilder.append(",CN=").append(access.getSubjectCommonName());
-
-            X500Name x500Name = new X500Name(stringBuilder.toString());
-
-
-            PublicKey csrPublicKey = (DSAPublicKey) new JcaPKCS10CertificationRequest(this.csr).setProvider(new BouncyCastleProvider()).getPublicKey();
+            X500Name issuerName = new JcaX509CertificateHolder((X509Certificate) keyStore.getCertificate(certificateIssuerName)).getSubject();
 
             X509v3CertificateBuilder certificateBuilder = new JcaX509v3CertificateBuilder(
-                    x500Name,
+                    issuerName,
                     new BigInteger(access.getSerialNumber()),
                     access.getNotBefore(),
                     access.getNotAfter(),
                     this.csr.getSubject(),
                     csrPublicKey
-
             );
 
-
-            String dateOfBirth = access.getDateOfBirth();
-            String placeOfBirth = access.getSubjectDirectoryAttribute(Constants.POB);
-            String countryOfCitizenship = access.getSubjectDirectoryAttribute(Constants.COC);
-            String gender = access.getGender();
-
-            Vector<Attribute> attributes = new Vector<>();
-
-            if (dateOfBirth.length() > 0)
-                attributes.add(new Attribute(BCStyle.DATE_OF_BIRTH, new DERSet(new DERGeneralString(dateOfBirth))));
-
-            if (placeOfBirth.length() > 0)
-                attributes.add(new Attribute(BCStyle.PLACE_OF_BIRTH, new DERSet(new DERGeneralString(placeOfBirth))));
-
-            if (countryOfCitizenship.length() > 0)
-                attributes.add(new Attribute(BCStyle.COUNTRY_OF_CITIZENSHIP, new DERSet(new DERGeneralString(countryOfCitizenship))));
-
-            if (gender.length() > 0)
-                attributes.add(new Attribute(BCStyle.GENDER, new DERSet(new DERGeneralString(gender))));
-
-
-            if (attributes.size() != 0)
-                certificateBuilder.addExtension(Extension.subjectDirectoryAttributes,
-                        access.isCritical(Constants.SDA),
-                        new SubjectDirectoryAttributes(attributes)
-                );
-
-
-            boolean[] selectedKeyUsages = access.getKeyUsage();
-
-            int keyUsages = 0;
-
-            if (selectedKeyUsages[KEY_USAGE_DIGITAL_SIGNATURE])
-                keyUsages |= KeyUsage.digitalSignature;
-
-            if (selectedKeyUsages[KEY_USAGE_CONTENT_COMMITMENT])
-                keyUsages |= KeyUsage.nonRepudiation;
-
-            if (selectedKeyUsages[KEY_USAGE_KEY_ENCIPHERMENT])
-                keyUsages |= KeyUsage.keyEncipherment;
-
-            if (selectedKeyUsages[KEY_USAGE_DATA_ENCIPHERMENT])
-                keyUsages |= KeyUsage.dataEncipherment;
-
-            if (selectedKeyUsages[KEY_USAGE_KEY_AGREEMENT])
-                keyUsages |= KeyUsage.keyAgreement;
-
-            if (selectedKeyUsages[KEY_USAGE_CERTIFICATE_SIGNING])
-                keyUsages |= KeyUsage.keyCertSign;
-
-            if (selectedKeyUsages[KEY_USAGE_CRL_SIGNING])
-                keyUsages |= KeyUsage.cRLSign;
-
-            if (selectedKeyUsages[KEY_USAGE_ENCIPHER_ONLY])
-                keyUsages |= KeyUsage.encipherOnly;
-
-            if (selectedKeyUsages[KEY_USAGE_DECIPHER_ONLY])
-                keyUsages |= KeyUsage.decipherOnly;
-
-
-
-            KeyUsage keyUsage = new KeyUsage(keyUsages);
-
-
-            certificateBuilder.addExtension(Extension.keyUsage,
-                    access.isCritical(Constants.KU),
-                    keyUsage);
-
-            int pathLen = 0;
-
-            if (access.getPathLen().length() > 0)
-                Integer.parseInt(access.getPathLen());
-
-            boolean isCA = access.isCA();
-
-            BasicConstraints basicConstraints;
-
-            if(isCA)
-                basicConstraints = new BasicConstraints(pathLen);
-            else
-                basicConstraints = new BasicConstraints(false);
-
-
-            certificateBuilder.addExtension(Extension.basicConstraints,
-                    access.isCritical(Constants.BC),
-                    basicConstraints
-            );
-
-            //=============================================================================
-
+            // ucitamo ekstenzije sertifikata
+            loadCertificateExtensions(certificateBuilder);
+            //==============================================================================================================
 
             // potpis
-            ContentSigner signer = new JcaContentSignerBuilder(algorithm).build((PrivateKey) keyStore.getKey(keyPairName, KEYSTORE_PASSWORD.toCharArray()));
+            ContentSigner signer = new JcaContentSignerBuilder(algorithm)
+                    .setProvider(BCProvider)
+                            .build((PrivateKey) keyStore.getKey(certificateIssuerName, KEYSTORE_PASSWORD.toCharArray()));
 
             // izgradmo sertifikat za potpisivanje
             X509Certificate signedCertificate = new JcaX509CertificateConverter().getCertificate(certificateBuilder.build(signer));
@@ -928,13 +975,16 @@ public class MyCode extends CodeV3 {
             // nekoliko klasa zarad popunjavanja fajla formata PKCS7
             CMSSignedDataGenerator cmsSignedDataGenerator = new CMSSignedDataGenerator();
 
+            // lista sertifikata u lancu
             List<JcaX509CertificateHolder> certificateChain = new ArrayList<>();
 
             CMSTypedData cmsTypedData = new CMSProcessableByteArray(signedCertificate.getEncoded());
 
+            // dodamo prvo potpisani sertifikat u lanac
             certificateChain.add(new JcaX509CertificateHolder(signedCertificate));
 
-            for(Certificate certificate :  keyStore.getCertificateChain(keyPairName))
+            // dodamo onda ostale iz lanca sertifikata koji potpisuje
+            for(Certificate certificate :  keyStore.getCertificateChain(certificateIssuerName))
                 certificateChain.add(new JcaX509CertificateHolder((X509Certificate) certificate));
 
             cmsSignedDataGenerator.addCertificates(new CollectionStore(certificateChain));
@@ -950,8 +1000,14 @@ public class MyCode extends CodeV3 {
         return false;
     }
 
+    /**
+     * Ucitava CA Reply za zadati sertifikat
+     * @param file naziv fajla gde se nalazi CA reply
+     * @param certificateName  naziv sertifikata za kojeg ucitavamo CA Reply
+     * @return true ako je uspesno, false u suprotnom
+     */
     @Override
-    public boolean importCAReply(String file, String keyPairName) {
+    public boolean importCAReply(String file, String certificateName) {
 
         try (FileInputStream fis = new FileInputStream(file)) {
             // format je CMS/PKCS7
@@ -972,10 +1028,10 @@ public class MyCode extends CodeV3 {
                 certificateChain[i++] = new JcaX509CertificateConverter().setProvider(new BouncyCastleProvider()).getCertificate(holder);
 
             // privatni kljuc za koji je sertifikat vezan
-            PrivateKey privateKey = (PrivateKey) keyStore.getKey(keyPairName, KEYSTORE_PASSWORD.toCharArray());
+            PrivateKey privateKey = (PrivateKey) keyStore.getKey(certificateName, KEYSTORE_PASSWORD.toCharArray());
 
             // sacuvamo izmene
-            keyStore.setKeyEntry(keyPairName, privateKey, KEYSTORE_PASSWORD.toCharArray(), certificateChain);
+            keyStore.setKeyEntry(certificateName, privateKey, KEYSTORE_PASSWORD.toCharArray(), certificateChain);
 
             saveKeyStore();
 
@@ -1015,16 +1071,19 @@ public class MyCode extends CodeV3 {
 
             String subjectInfo = certificate.getSubjectDN().toString();
 
-            // vratimo subject info formatiran kako treba
-            return subjectInfo.replaceAll(", ", ",")
-                    .replaceAll("=,", "= ,")
-                    .replaceAll("  ", " ");
+            // vracamo koji mu je signature algoritam uz osnovne podatke
+            return reformatBasicCertInfo(subjectInfo + ",SA=" + certificate.getSigAlgName());
         } catch (KeyStoreException e) {
             e.printStackTrace();
         }
         return null;
     }
 
+    /**
+     * Dohvata naziv algoritma javnog kljuca zadatog sertifikata
+     * @param certificateName naziv sertifikata
+     * @return naziv algoritma
+     */
     @Override
     public String getCertPublicKeyAlgorithm(String certificateName) {
 
@@ -1037,6 +1096,11 @@ public class MyCode extends CodeV3 {
         return null;
     }
 
+    /**
+     *  Vraca parametar javnog kljuca sertifikata
+     * @param certificateName naziv sertifikata
+     * @return parametar javnog kljuca
+     */
     @Override
     public String getCertPublicKeyParameter(String certificateName) {
 
