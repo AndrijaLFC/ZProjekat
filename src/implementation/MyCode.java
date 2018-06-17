@@ -217,7 +217,7 @@ public class MyCode extends CodeV3 {
     }
 
     /**
-     * Ucitava ekstenzije sertifikata u skladisti ih u zadati certificateBuilder
+     * Ucitava ekstenzije sertifikata i skladisti ih u zadati certificateBuilder
      * @param certificateBuilder certificateBuilder u koji smestamo podatke
      */
     private void loadCertificateExtensions(X509v3CertificateBuilder certificateBuilder){
@@ -557,7 +557,7 @@ public class MyCode extends CodeV3 {
             // Ukoliko nije CA, vraca se vrednost -1,
             // postavimo odgovarajucu vrednost u gui
             if (basicConstraints != -1)
-                access.setPathLen(basicConstraints == Integer.MAX_VALUE ? "" + basicConstraints : "");
+                access.setPathLen(basicConstraints != Integer.MAX_VALUE ? "" + basicConstraints : "");
 
             // namestamo odgovarajuce podatke na gui
             access.setCA(basicConstraints != -1);
